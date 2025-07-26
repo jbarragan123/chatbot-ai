@@ -129,7 +129,8 @@ src/
 Once the server is running, Swagger documentation is available at:
 
 ```
-http://localhost:3000/api
+http://localhost:3000/api-docs
+
 ```
 
 This includes:
