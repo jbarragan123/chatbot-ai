@@ -13,7 +13,7 @@ export interface Product {
   imageUrl: string;           
   productType: string;        
   discount: number;           
-  price: number;              
+  price: string;              
   variants: string;           
   createDate: string;         
 }
@@ -53,8 +53,8 @@ export class ChatService {
           type: 'object',
           properties: {
             amount: {
-              type: 'number',
-              description: 'The amount of money to convert',
+              type: 'string',
+              description: 'The amount of money to convert. It can be a number like "59.99" or a range like "350.0 - 365.0".',
             },
             fromCurrency: {
               type: 'string',
@@ -70,11 +70,14 @@ export class ChatService {
       },
     ];
 
-    //First call
-    const firstResponse = await this.openaiService.chatWithFunctions(messages, functions);
+    let currentMessages = [...messages];
+    let currentResponse = await this.openaiService.chatWithFunctions(currentMessages, functions);
 
-    if (firstResponse.function_call) {
-      const { name: functionName, arguments: functionArgs } = firstResponse.function_call;
+    let step = 0;
+    const maxSteps = 5; // Safety limit to prevent infinite loops
+
+    while (currentResponse.function_call && step < maxSteps) {
+      const { name: functionName, arguments: functionArgs } = currentResponse.function_call;
       const parsedArgs = JSON.parse(functionArgs || '{}');
 
       let functionResult = '';
@@ -86,26 +89,22 @@ export class ChatService {
         functionResult = await this.convertCurrencies(amount, fromCurrency, toCurrency);
       }
 
-      // Second call
-      const secondResponse = await this.openaiService.chatWithFunctions(
-        [
-          ...messages,
-          firstResponse,
-          {
-            role: 'function',
-            name: functionName,
-            content: functionResult,
-          },
-        ],
-        functions,
-      );
+      // Append function result to message chain
+      currentMessages.push(currentResponse);
+      currentMessages.push({
+        role: 'function',
+        name: functionName,
+        content: functionResult,
+      });
 
-      return secondResponse.content || '[No final response]';
+      // Call OpenAI again with updated messages
+      currentResponse = await this.openaiService.chatWithFunctions(currentMessages, functions);
+      step++;
     }
 
-    return firstResponse.content || '[No function used]';
+    // Final response from the assistant
+    return currentResponse.content || '[No final response]';
   }
-
 
   private async searchProducts(query: string): Promise<string> {
     const matchedResults: Product[] = [];
@@ -157,7 +156,7 @@ export class ChatService {
 
 
 
-  private async convertCurrencies(amount: number, fromCurrency: string, toCurrency: string): Promise<string> {
+  private async convertCurrencies(amount: number | string,fromCurrency: string,toCurrency: string): Promise<string> {
     const API_KEY = process.env.OPEN_EXCHANGE_RATES_API_KEY;
     const url = `https://api.fastforex.io/fetch-multi?from=${fromCurrency}&to=${toCurrency}&api_key=${API_KEY}`;
 
@@ -169,11 +168,38 @@ export class ChatService {
         return `No conversion rates found for ${fromCurrency} to ${toCurrency}.`;
       }
 
-      let resultStrings: string[] = [];
+      // some ranges like 50-60
+      if (typeof amount === 'string' && amount.includes('-')) {
+        const [minStr, maxStr] = amount.split('-').map(p => p.trim());
+        const min = parseFloat(minStr);
+        const max = parseFloat(maxStr);
+
+        if (isNaN(min) || isNaN(max)) {
+          return `Invalid amount range: "${amount}".`;
+        }
+
+        const rate = rates[toCurrency];
+        if (!rate) {
+          return `Conversion rate not available for ${toCurrency}.`;
+        }
+
+        const convertedMin = min * rate;
+        const convertedMax = max * rate;
+
+        return `${amount} ${fromCurrency} ≈ ${convertedMin.toFixed(2)} - ${convertedMax.toFixed(2)} ${toCurrency}`;
+      }
+
+      // normal number
+      const numericAmount = typeof amount === 'string' ? parseFloat(amount) : amount;
+      if (isNaN(numericAmount)) {
+        return `Invalid amount: ${amount}`;
+      }
+
+      const resultStrings: string[] = [];
 
       for (const [currency, rate] of Object.entries(rates)) {
-        const convertedAmount = amount * Number(rate);
-        resultStrings.push(`${amount} ${fromCurrency} ≈ ${convertedAmount.toFixed(2)} ${currency}`);
+        const convertedAmount = numericAmount * Number(rate);
+        resultStrings.push(`${numericAmount} ${fromCurrency} ≈ ${convertedAmount.toFixed(2)} ${currency}`);
       }
 
       return resultStrings.join(' | ');
@@ -182,4 +208,6 @@ export class ChatService {
       return 'An error occurred while converting currencies.';
     }
   }
+
+  
 }
