@@ -1,3 +1,8 @@
+/**
+ * ChatService handles user queries using OpenAI's function-calling capabilities.
+ * It interprets natural language input and dynamically invokes custom business logic,
+ * such as product search or currency conversion.
+ */
 import { Injectable } from '@nestjs/common';
 import { ChatCompletionMessageParam } from 'openai/resources/chat';
 import { OpenAIService } from './openai/openai.service';
@@ -6,23 +11,33 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as csv from 'csv-parser';
 
+/**
+ * Interface representing a single product from the catalog.
+ */
 export interface Product {
-  displayTitle: string;       
-  embeddingText: string;      
-  url: string;                
-  imageUrl: string;           
-  productType: string;        
-  discount: number;           
-  price: string;              
-  variants: string;           
-  createDate: string;         
+  displayTitle: string;
+  embeddingText: string;
+  url: string;
+  imageUrl: string;
+  productType: string;
+  discount: number;
+  price: string;
+  variants: string;
+  createDate: string;
 }
 
 @Injectable()
 export class ChatService {
-
   constructor(private readonly openaiService: OpenAIService) {}
 
+  /**
+   * Processes the user query using OpenAI's function-calling interface.
+   * It iteratively interprets and executes the appropriate function calls (like searching products or converting currencies),
+   * feeding results back into the conversation until a final response is generated.
+   *
+   * @param query - The user’s natural language query.
+   * @returns A final assistant response based on AI interpretation and function execution.
+   */
   async processUserQuery(query: string): Promise<string> {
     const messages: ChatCompletionMessageParam[] = [
       {
@@ -31,6 +46,7 @@ export class ChatService {
       },
     ];
 
+    // Define available functions the AI can call
     const functions = [
       {
         name: 'searchProducts',
@@ -54,15 +70,15 @@ export class ChatService {
           properties: {
             amount: {
               type: 'string',
-              description: 'The amount of money to convert. It can be a number like "59.99" or a range like "350.0 - 365.0".',
+              description: 'Amount to convert. Can be a number or a range like "350.0 - 365.0".',
             },
             fromCurrency: {
               type: 'string',
-              description: 'The 3-letter currency code to convert from (e.g., EUR)',
+              description: 'Three-letter ISO currency code to convert from (e.g., EUR)',
             },
             toCurrency: {
               type: 'string',
-              description: 'The 3-letter currency code to convert to (e.g., USD, COP)',
+              description: 'Three-letter ISO currency code to convert to (e.g., USD, COP)',
             },
           },
           required: ['amount', 'fromCurrency', 'toCurrency'],
@@ -74,7 +90,7 @@ export class ChatService {
     let currentResponse = await this.openaiService.chatWithFunctions(currentMessages, functions);
 
     let step = 0;
-    const maxSteps = 5; // Safety limit to prevent infinite loops
+    const maxSteps = 5; // Safety limit
 
     while (currentResponse.function_call && step < maxSteps) {
       const { name: functionName, arguments: functionArgs } = currentResponse.function_call;
@@ -82,6 +98,7 @@ export class ChatService {
 
       let functionResult = '';
 
+      // Handle AI-requested function calls
       if (functionName === 'searchProducts') {
         functionResult = await this.searchProducts(parsedArgs.query);
       } else if (functionName === 'convertCurrencies') {
@@ -89,7 +106,6 @@ export class ChatService {
         functionResult = await this.convertCurrencies(amount, fromCurrency, toCurrency);
       }
 
-      // Append function result to message chain
       currentMessages.push(currentResponse);
       currentMessages.push({
         role: 'function',
@@ -97,15 +113,20 @@ export class ChatService {
         content: functionResult,
       });
 
-      // Call OpenAI again with updated messages
       currentResponse = await this.openaiService.chatWithFunctions(currentMessages, functions);
       step++;
     }
 
-    // Final response from the assistant
     return currentResponse.content || '[No final response]';
   }
 
+  /**
+   * Searches for products matching the query in a local CSV product catalog.
+   * If no matches are found, returns two random fallback products.
+   *
+   * @param query - The product search keyword.
+   * @returns A markdown-formatted string with product titles, descriptions, and prices.
+   */
   private async searchProducts(query: string): Promise<string> {
     const matchedResults: Product[] = [];
     const allProducts: Product[] = [];
@@ -133,10 +154,9 @@ export class ChatService {
             selectedProducts = matchedResults.slice(0, 2);
             messageHeader = `Here are some products related to your query: "${query}"\n`;
           } else {
-            // Fallback: return 2 random products
             const shuffled = allProducts.sort(() => 0.5 - Math.random());
             selectedProducts = shuffled.slice(0, 2);
-            messageHeader = `I couldn’t find any specific products for "${query}", but here are a couple of other options you might like:\n`;
+            messageHeader = `I couldn’t find specific products for "${query}", but here are a couple of suggestions:\n`;
           }
 
           const formatted = selectedProducts
@@ -154,9 +174,16 @@ export class ChatService {
     });
   }
 
-
-
-  private async convertCurrencies(amount: number | string,fromCurrency: string,toCurrency: string): Promise<string> {
+  /**
+   * Converts a given amount or range from one currency to another using the FastForex API.
+   * Supports both single values and range formats like "350 - 365".
+   *
+   * @param amount - A string or number representing the amount to convert.
+   * @param fromCurrency - The source currency code.
+   * @param toCurrency - The target currency code.
+   * @returns A formatted string with the converted amount(s).
+   */
+  private async convertCurrencies(amount: number | string,fromCurrency: string,toCurrency: string,): Promise<string> {
     const API_KEY = process.env.OPEN_EXCHANGE_RATES_API_KEY;
     const url = `https://api.fastforex.io/fetch-multi?from=${fromCurrency}&to=${toCurrency}&api_key=${API_KEY}`;
 
@@ -168,7 +195,7 @@ export class ChatService {
         return `No conversion rates found for ${fromCurrency} to ${toCurrency}.`;
       }
 
-      // some ranges like 50-60
+      // Handle ranges like "350 - 365"
       if (typeof amount === 'string' && amount.includes('-')) {
         const [minStr, maxStr] = amount.split('-').map(p => p.trim());
         const min = parseFloat(minStr);
@@ -189,7 +216,6 @@ export class ChatService {
         return `${amount} ${fromCurrency} ≈ ${convertedMin.toFixed(2)} - ${convertedMax.toFixed(2)} ${toCurrency}`;
       }
 
-      // normal number
       const numericAmount = typeof amount === 'string' ? parseFloat(amount) : amount;
       if (isNaN(numericAmount)) {
         return `Invalid amount: ${amount}`;
@@ -208,6 +234,4 @@ export class ChatService {
       return 'An error occurred while converting currencies.';
     }
   }
-
-  
 }
