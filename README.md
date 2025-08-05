@@ -1,6 +1,6 @@
-# 🧠 Wizybot Technical Assessment - Fullstack Developer
+# 🧠 Technical Assessment - Fullstack Developer
 
-This repository contains the solution to the technical assessment for the Fullstack Developer position at **Wizybot**. The project implements a NestJS-based API endpoint that allows communication with an AI chatbot capable of using two tools:
+This repository contains the solution to the technical assessment for the Fullstack Developer position. The project implements a NestJS-based API endpoint that allows communication with an AI chatbot capable of using two tools:
 
 - `searchProducts(query: string)`
 - `convertCurrencies(amount: number, fromCurrency: string, toCurrency: string)`
